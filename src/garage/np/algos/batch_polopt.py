@@ -36,7 +36,7 @@ class BatchPolopt(RLAlgorithm):
         self.max_path_length = max_path_length
         self.n_samples = n_samples
 
-        self.episode_reward_mean = collections.deque(maxlen=100)
+        self._episode_reward_mean = collections.deque(maxlen=100)
         if policy.vectorized:
             self.sampler_cls = OnPolicyVectorizedSampler
         else:
@@ -112,7 +112,7 @@ class BatchPolopt(RLAlgorithm):
             [path['returns'][0] for path in paths]))
 
         undiscounted_returns = [sum(path['rewards']) for path in paths]
-        self.episode_reward_mean.extend(undiscounted_returns)
+        self._episode_reward_mean.extend(undiscounted_returns)
 
         ent = np.sum(self.policy.distribution.entropy(agent_infos) *
                      valids) / np.sum(valids)
@@ -123,7 +123,7 @@ class BatchPolopt(RLAlgorithm):
         tabular.record('AverageDiscountedReturn', average_discounted_return)
         tabular.record('AverageReturn', np.mean(undiscounted_returns))
         tabular.record('Extras/EpisodeRewardMean',
-                       np.mean(self.episode_reward_mean))
+                       np.mean(self._episode_reward_mean))
         tabular.record('NumTrajs', len(paths))
         tabular.record('Entropy', ent)
         tabular.record('Perplexity', np.exp(ent))

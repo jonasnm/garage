@@ -10,7 +10,6 @@ class Policy(abc.ABC):
 
     Args:
         env_spec (garage.envs.env_spec.EnvSpec): Environment specification.
-
     """
 
     def __init__(self, env_spec):
@@ -18,8 +17,9 @@ class Policy(abc.ABC):
 
     def get_action(self, observation):
         """Get action given observation."""
-        return np.squeeze(
-            self.get_actions(np.expand_dims(observation, axis=0)))
+        action, agent_info = self.get_actions(
+            np.expand_dims(observation, axis=0))
+        return np.squeeze(action), np.squeeze(agent_info)
 
     @abc.abstractmethod
     def get_actions(self, observations):
@@ -35,3 +35,8 @@ class Policy(abc.ABC):
     def action_space(self):
         """Policy action space."""
         return self._env_spec.action_space
+
+    @property
+    def vectorized(self):
+        """Vectorized or not."""
+        return False
