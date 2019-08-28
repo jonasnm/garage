@@ -11,6 +11,7 @@ import tensorflow as tf
 
 from garage.misc.overrides import overrides
 from garage.tf.algos import DDPG
+from garage.tf.misc import tensor_utils
 
 
 class TD3(DDPG):
@@ -62,7 +63,6 @@ class TD3(DDPG):
             Exploration strategy.
 
     """
-
     def __init__(self,
                  env_spec,
                  policy,
@@ -93,41 +93,41 @@ class TD3(DDPG):
                  exploration_strategy=None):
         self.qf2 = qf2
 
-        super(TD3, self).__init__(
-            env_spec=env_spec,
-            policy=policy,
-            qf=qf,
-            replay_buffer=replay_buffer,
-            target_update_tau=target_update_tau,
-            policy_lr=policy_lr,
-            qf_lr=qf_lr,
-            policy_weight_decay=policy_weight_decay,
-            qf_weight_decay=qf_weight_decay,
-            policy_optimizer=policy_optimizer,
-            qf_optimizer=qf_optimizer,
-            clip_pos_returns=clip_pos_returns,
-            clip_return=clip_return,
-            discount=discount,
-            max_action=max_action,
-            name=name,
-            n_epoch_cycles=n_epoch_cycles,
-            max_path_length=max_path_length,
-            n_train_steps=n_train_steps,
-            buffer_batch_size=buffer_batch_size,
-            min_buffer_size=min_buffer_size,
-            rollout_batch_size=rollout_batch_size,
-            reward_scale=reward_scale,
-            input_include_goal=input_include_goal,
-            smooth_return=smooth_return,
-            exploration_strategy=exploration_strategy)
+        super(TD3, self).__init__(env_spec=env_spec,
+                                  policy=policy,
+                                  qf=qf,
+                                  replay_buffer=replay_buffer,
+                                  target_update_tau=target_update_tau,
+                                  policy_lr=policy_lr,
+                                  qf_lr=qf_lr,
+                                  policy_weight_decay=policy_weight_decay,
+                                  qf_weight_decay=qf_weight_decay,
+                                  policy_optimizer=policy_optimizer,
+                                  qf_optimizer=qf_optimizer,
+                                  clip_pos_returns=clip_pos_returns,
+                                  clip_return=clip_return,
+                                  discount=discount,
+                                  max_action=max_action,
+                                  name=name,
+                                  n_epoch_cycles=n_epoch_cycles,
+                                  max_path_length=max_path_length,
+                                  n_train_steps=n_train_steps,
+                                  buffer_batch_size=buffer_batch_size,
+                                  min_buffer_size=min_buffer_size,
+                                  rollout_batch_size=rollout_batch_size,
+                                  reward_scale=reward_scale,
+                                  input_include_goal=input_include_goal,
+                                  smooth_return=smooth_return,
+                                  exploration_strategy=exploration_strategy)
 
     @overrides
     def init_opt(self):
         """Build the loss function and init the optimizer."""
         with tf.name_scope(self.name, 'TD3'):
             # Create target policy (actor) and qf (critic) networks
-            self.target_policy_f_prob_online, _, _ = self.policy.build_net(
-                trainable=False, name='target_policy')
+            self.target_policy_f_prob_online = tensor_utils.compile_function(
+                inputs=[self.target_policy.model.networks['default'].input],
+                outputs=self.target_policy.model.networks['default'].outputs)
             self.target_qf_f_prob_online, _, _, _ = self.qf.build_net(
                 trainable=False, name='target_qf')
             self.target_qf2_f_prob_online, _, _, _ = self.qf2.build_net(
@@ -135,19 +135,19 @@ class TD3(DDPG):
 
             # Set up target init and update functions
             with tf.name_scope('setup_target'):
-                policy_init_ops, policy_update_ops = self.get_target_ops(
+                policy_init_op, policy_update_op = tensor_utils.get_target_ops(
                     self.policy.get_global_vars(),
-                    self.policy.get_global_vars('target_policy'), self.tau)
-                qf_init_ops, qf_update_ops = self.get_target_ops(
+                    self.target_policy.get_global_vars(), self.tau)
+                qf_init_ops, qf_update_ops = tensor_utils.get_target_ops(
                     self.qf.get_global_vars(),
                     self.qf.get_global_vars('target_qf'), self.tau)
-                qf2_init_ops, qf2_update_ops = self.get_target_ops(
+                qf2_init_ops, qf2_update_ops = tensor_utils.get_target_ops(
                     self.qf2.get_global_vars(),
                     self.qf2.get_global_vars('target_qf2'), self.tau)
-                target_init_op = policy_init_ops + qf_init_ops
-                target_update_op = policy_update_ops + qf_update_ops
-                target_init_op2 = policy_init_ops + qf2_init_ops
-                target_update_op2 = (policy_update_ops + qf2_update_ops)
+                target_init_op = policy_init_op + qf_init_ops
+                target_update_op = policy_update_op + qf_update_ops
+                target_init_op2 = policy_init_op + qf2_init_ops
+                target_update_op2 = (policy_update_op + qf2_update_ops)
 
             with tf.name_scope('inputs'):
                 if self.input_include_goal:
@@ -156,10 +156,9 @@ class TD3(DDPG):
                 else:
                     obs_dim = self.env_spec.observation_space.flat_dim
                 y = tf.placeholder(tf.float32, shape=(None, 1), name='input_y')
-                obs = tf.placeholder(
-                    tf.float32,
-                    shape=(None, obs_dim),
-                    name='input_observation')
+                obs = tf.placeholder(tf.float32,
+                                     shape=(None, obs_dim),
+                                     name='input_observation')
                 actions = tf.placeholder(
                     tf.float32,
                     shape=(None, self.env_spec.action_space.flat_dim),
@@ -167,10 +166,12 @@ class TD3(DDPG):
 
             # Set up policy training function
             next_action = self.policy.get_action_sym(obs, name='policy_action')
-            qval = self.qf.get_qval_sym(
-                obs, next_action, name='policy_action_qval')
-            q2val = self.qf2.get_qval_sym(
-                obs, next_action, name='policy_action_q2val')
+            qval = self.qf.get_qval_sym(obs,
+                                        next_action,
+                                        name='policy_action_qval')
+            q2val = self.qf2.get_qval_sym(obs,
+                                          next_action,
+                                          name='policy_action_q2val')
             next_qval = tf.minimum(qval, q2val)
             with tf.name_scope('action_loss'):
                 action_loss = -tf.reduce_mean(next_qval)
