@@ -8,6 +8,7 @@ minimum value of two critics instead of one to limit overestimation.
 
 import numpy as np
 import tensorflow as tf
+import tensorflow.contrib as tc
 
 from garage.misc.overrides import overrides
 from garage.tf.algos import DDPG
@@ -88,10 +89,17 @@ class TD3(DDPG):
                  min_buffer_size=1e4,
                  rollout_batch_size=1,
                  reward_scale=1.,
+                 action_noise_sigma=0.2,
+                 actor_update_period=2,
+                 action_noise_clip=0.5,
                  input_include_goal=False,
                  smooth_return=True,
                  exploration_strategy=None):
         self.qf2 = qf2
+        self._action_noise_sigma = action_noise_sigma
+        self._action_noise_clip = action_noise_clip
+        self._actor_update_period = actor_update_period
+        self._action_loss = None
 
         super(TD3, self).__init__(env_spec=env_spec,
                                   policy=policy,
@@ -144,10 +152,14 @@ class TD3(DDPG):
                 qf2_init_ops, qf2_update_ops = tensor_utils.get_target_ops(
                     self.qf2.get_global_vars(),
                     self.qf2.get_global_vars('target_qf2'), self.tau)
-                target_init_op = policy_init_op + qf_init_ops
-                target_update_op = policy_update_op + qf_update_ops
-                target_init_op2 = policy_init_op + qf2_init_ops
-                target_update_op2 = (policy_update_op + qf2_update_ops)
+                target_init_op = policy_init_op + qf_init_ops + qf2_init_ops
+                target_update_op = (policy_update_op + qf_update_ops +
+                                    qf2_update_ops)
+
+            f_init_target = tensor_utils.compile_function(
+                inputs=[], outputs=target_init_op)
+            f_update_target = tensor_utils.compile_function(
+                inputs=[], outputs=target_update_op)
 
             with tf.name_scope('inputs'):
                 if self.input_include_goal:
@@ -166,26 +178,24 @@ class TD3(DDPG):
 
             # Set up policy training function
             next_action = self.policy.get_action_sym(obs, name='policy_action')
-            qval = self.qf.get_qval_sym(obs,
-                                        next_action,
-                                        name='policy_action_qval')
-            q2val = self.qf2.get_qval_sym(obs,
-                                          next_action,
-                                          name='policy_action_q2val')
-            next_qval = tf.minimum(qval, q2val)
+            next_qval = self.qf.get_qval_sym(obs,
+                                             next_action,
+                                             name='policy_action_qval')
             with tf.name_scope('action_loss'):
                 action_loss = -tf.reduce_mean(next_qval)
                 if self.policy_weight_decay > 0.:
-                    policy_reg = self.policy_weight_decay * tf.add_n([
-                        tf.nn.l2_loss(v)
-                        for v in self.policy.get_regularizable_vars()
-                    ])
+                    policy_reg = tc.layers.apply_regularization(
+                        tc.layers.l2_regularizer(self.policy_weight_decay),
+                        weights_list=self.policy.get_regularizable_vars())
                     action_loss += policy_reg
 
             with tf.name_scope('minimize_action_loss'):
                 policy_train_op = self.policy_optimizer(
                     self.policy_lr, name='PolicyOptimizer').minimize(
                         action_loss, var_list=self.policy.get_trainable_vars())
+
+            f_train_policy = tensor_utils.compile_function(
+                inputs=[obs], outputs=[policy_train_op, action_loss])
 
             # Set up qf training function
             qval = self.qf.get_qval_sym(obs, actions, name='q_value')
@@ -208,28 +218,18 @@ class TD3(DDPG):
                     self.qf_lr, name='QFunctionOptimizer').minimize(
                         qval_loss, var_list=self.qf2.get_trainable_vars())
 
-            self.f_train_policy = tf.get_default_session().make_callable(
-                fetches=[policy_train_op, action_loss], feed_list=[obs])
+            f_train_qf = tensor_utils.compile_function(
+                inputs=[y, obs, actions],
+                outputs=[qf_train_op, qval_loss, qval])
+            f_train_qf2 = tensor_utils.compile_function(
+                inputs=[y, obs, actions],
+                outputs=[qf2_train_op, qval_loss, q2val])
 
-            self.f_train_qf = tf.get_default_session().make_callable(
-                fetches=[qf_train_op, qval_loss, qval],
-                feed_list=[y, obs, actions])
-
-            self.f_init_target = tf.get_default_session().make_callable(
-                target_init_op)
-
-            self.f_update_target = tf.get_default_session().make_callable(
-                target_update_op)
-
-            self.f_train_qf2 = tf.get_default_session().make_callable(
-                fetches=[qf2_train_op, qval_loss, q2val],
-                feed_list=[y, obs, actions])
-
-            self.f_init_target2 = tf.get_default_session().make_callable(
-                target_init_op2)
-
-            self.f_update_target2 = tf.get_default_session().make_callable(
-                target_update_op2)
+            self.f_train_policy = f_train_policy
+            self.f_train_qf = f_train_qf
+            self.f_init_target = f_init_target
+            self.f_update_target = f_update_target
+            self.f_train_qf2 = f_train_qf2
 
     @overrides
     def optimize_policy(self, itr, samples_data):
@@ -265,6 +265,13 @@ class TD3(DDPG):
             inputs = observations
 
         target_actions = self.target_policy_f_prob_online(next_inputs)
+
+        noise = np.random.normal(0.0, self._action_noise_sigma,
+                                 target_actions.shape)
+        noise = np.clip(noise, -self._action_noise_clip,
+                        self._action_noise_clip)
+        target_actions += noise
+
         target_qvals = self.target_qf_f_prob_online(next_inputs,
                                                     target_actions)
         target_q2vals = self.target_qf2_f_prob_online(next_inputs,
@@ -279,13 +286,13 @@ class TD3(DDPG):
         _, qval_loss, qval = self.f_train_qf(ys, inputs, actions)
         _, q2val_loss, q2val = self.f_train_qf2(ys, inputs, actions)
 
-        if np.equal(q2val_loss, np.minimum(qval_loss, q2val_loss)):
+        if qval_loss > q2val_loss:
+            qval_loss = q2val_loss
             qval = q2val
-        qval_loss = np.minimum(qval_loss, q2val_loss)
 
-        _, action_loss = self.f_train_policy(inputs)
+        # update policy and target networks less frequently
+        if self._action_loss is None or (itr % self._actor_update_period) == 0:
+            _, self._action_loss = self.f_train_policy(inputs)
+            self.f_update_target()
 
-        self.f_update_target()
-        self.f_update_target2()
-
-        return qval_loss, ys, qval, action_loss
+        return qval_loss, ys, qval, self._action_loss
