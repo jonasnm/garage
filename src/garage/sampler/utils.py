@@ -13,10 +13,15 @@ def rollout(env,
             speedup=1,
             always_return_paths=False,
             deterministic=False):
-    """
-    :param deterministic: Boolean variable indicating whether a
-    stochastic or deterministic action should be taken during the
-    rollout. This is False (stochastic actions) by default.
+    """ Generate a sample from a policy.
+
+    Args:
+        deterministic (bool): Boolean variable indicating whether a
+        stochastic or deterministic action should be taken during the
+        rollout. This is False (stochastic actions) by default.
+
+    Returns:
+
     """
     observations = []
     actions = []
