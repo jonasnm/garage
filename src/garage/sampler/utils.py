@@ -35,13 +35,9 @@ def rollout(env,
         env.render()
     while path_length < max_path_length:
         a, agent_info = agent.get_action(o)
-
-        if deterministic == False:
-            action = a
-        else:
-            action = agent_info['mean']
-
-        next_o, r, d, env_info = env.step(action)
+        if deterministic:
+            a = agent_info['mean']
+        next_o, r, d, env_info = env.step(a)
         observations.append(env.observation_space.flatten(o))
         rewards.append(r)
         actions.append(env.action_space.flatten(a))
@@ -65,6 +61,7 @@ def rollout(env,
         agent_infos=tensor_utils.stack_tensor_dict_list(agent_infos),
         env_infos=tensor_utils.stack_tensor_dict_list(env_infos),
     )
+
 
 def truncate_paths(paths, max_samples):
     """
