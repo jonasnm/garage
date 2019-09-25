@@ -2,7 +2,8 @@
 # and scripts/setup_macos.sh, if there's any changes applied to this file,
 # specially regarding the installation of dependencies, apply those same
 # changes to the mentioned files.
-ARG PARENT_IMAGE=ubuntu:18.04
+ARG PARENT_IMAGE=nvidia/cuda:10.0-cudnn7-runtime-ubuntu18.04
+#ARG PARENT_IMAGE=ubuntu:18.04
 FROM $PARENT_IMAGE
 
 # http://bugs.python.org/issue19846
@@ -90,7 +91,7 @@ RUN pip install --upgrade pip
 # In this step only the presence of the file mjkey.txt is required, so we only
 # create an empty file
 RUN touch /root/.mujoco/mjkey.txt && \
-  pip install -e .[all,dev] && \
+  pip install -e .[all,dev,gpu] && \
   rm -r /root/.cache/pip && \
   rm /root/.mujoco/mjkey.txt
 
@@ -100,3 +101,11 @@ COPY .pre-commit-config.yaml /root/code/garage
 RUN git init && \
   pre-commit install && \
   pre-commit install-hooks
+#
+# ========== GIT: OpenAI Gym Diabetes version ==========
+# Added by Jonas
+CMD mkdir /root/code
+CMD mkdir /root/git
+
+RUN git clone https://github.com/jonasnm/gym.git /root/git/gym
+RUN pip install -e /root/git/gym/
